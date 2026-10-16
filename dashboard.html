@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - SIMBAR PLN</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="assets/css/style.css" rel="stylesheet">
+</head>
+<body>
+  <aside id="sidebar"></aside>
+  <div class="main">
+    <header id="topbar"></header>
+    <div class="content">
+
+      <div class="row g-3 mb-3" id="stats">
+        <div class="col-6 col-xl-3"><div class="card stat"><div class="icon i-blue"><i class="bi bi-boxes"></i></div><div><div class="label">Jenis Barang</div><div class="value" id="sJenis">-</div></div></div></div>
+        <div class="col-6 col-xl-3"><div class="card stat"><div class="icon i-yellow"><i class="bi bi-stack"></i></div><div><div class="label">Total Stok</div><div class="value" id="sStok">-</div></div></div></div>
+        <div class="col-6 col-xl-3"><div class="card stat"><div class="icon i-green"><i class="bi bi-box-arrow-in-down"></i></div><div><div class="label">Masuk Bulan Ini</div><div class="value" id="sMasuk">-</div></div></div></div>
+        <div class="col-6 col-xl-3"><div class="card stat"><div class="icon i-orange"><i class="bi bi-box-arrow-up"></i></div><div><div class="label">Keluar Bulan Ini</div><div class="value" id="sKeluar">-</div></div></div></div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-lg-8">
+          <div class="card h-100">
+            <div class="card-header">Tren Barang Masuk vs Keluar (6 bulan terakhir)</div>
+            <div class="card-body"><div class="chart-box"><canvas id="chart"></canvas></div></div>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span><i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>Stok Menipis</span>
+              <span class="badge badge-menipis" id="sLow">0</span>
+            </div>
+            <div class="list-group list-group-flush" id="lowList" style="max-height:340px;overflow:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">10 Transaksi Terbaru</div>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>Tanggal</th><th>Jenis</th><th>Kode</th><th>Barang</th><th class="text-end">Jumlah</th><th>Referensi</th><th>Petugas</th></tr></thead>
+            <tbody id="recent"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+    <div class="app-footer">SIMBAR PLN &middot; Sistem Monitoring Barang</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script>
+  (async () => {
+    const user = await initPage('Dashboard');
+    if (!user) return;
+
+    $('#recent').innerHTML = loadingRow(7);
+    try {
+      const { ringkasan: r, tren, menipis, terbaru } = await api('dashboard.php');
+
+      $('#sJenis').textContent = fmtNum(r.jenis);
+      $('#sStok').textContent = fmtNum(r.total_stok);
+      $('#sMasuk').textContent = fmtNum(r.masuk);
+      $('#sKeluar').textContent = fmtNum(r.keluar);
+      $('#sLow').textContent = r.menipis;
+
+      $('#lowList').innerHTML = menipis.length ? menipis.map((i) => `
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div><strong>${esc(i.nama)}</strong><br><small class="text-muted">${esc(i.kode)}</small></div>
+            <div class="text-end"><span class="${Number(i.stock) <= 0 ? 'text-danger' : 'text-warning'} fw-bold">${fmtNum(i.stock)}</span>
+              <small class="text-muted d-block">min ${fmtNum(i.stok_min)} ${esc(i.satuan)}</small></div>
+          </div>
+        </div>`).join('') : '<div class="empty"><i class="bi bi-check2-circle text-success"></i>Semua stok aman</div>';
+
+      const bln = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+      new Chart($('#chart'), {
+        type: 'bar',
+        data: {
+          labels: tren.map((t) => bln[Number(t.bulan.slice(5)) - 1] + ' ' + t.bulan.slice(2, 4)),
+          datasets: [
+            { label: 'Barang Masuk', data: tren.map((t) => t.masuk), backgroundColor: '#1B75BC', borderRadius: 6 },
+            { label: 'Barang Keluar', data: tren.map((t) => t.keluar), backgroundColor: '#FFD500', borderRadius: 6 },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          scales: { y: { beginAtZero: true, grid: { color: '#EEF2F7' } }, x: { grid: { display: false } } } },
+      });
+
+      $('#recent').innerHTML = terbaru.length ? terbaru.map((t) => `
+        <tr><td>${fmtDate(t.tanggal)}</td><td>${tipeBadge(t.tipe)}</td><td>${esc(t.kode)}</td><td>${esc(t.nama)}</td>
+        <td class="text-end fw-semibold">${fmtNum(t.jumlah)} <small class="text-muted">${esc(t.satuan)}</small></td>
+        <td>${esc(t.referensi)}</td><td>${esc(t.petugas)}</td></tr>`).join('') : emptyRow(7, 'Belum ada transaksi');
+    } catch (e) {
+      toast(e.message, 'error');
+      $('#recent').innerHTML = emptyRow(7, 'Gagal memuat data');
+    }
+  })();
+  </script>
+</body>
+</html>

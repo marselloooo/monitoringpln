@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laporan - SIMBAR PLN</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="assets/css/style.css" rel="stylesheet">
+</head>
+<body>
+  <aside id="sidebar"></aside>
+  <div class="main">
+    <header id="topbar"></header>
+    <div class="content">
+
+      <div class="card mb-3 no-print">
+        <div class="card-body">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3"><label class="form-label">Jenis Laporan</label>
+              <select id="type" class="form-select">
+                <option value="stock">Laporan Stok</option>
+                <option value="incoming">Laporan Barang Masuk</option>
+                <option value="outgoing">Laporan Barang Keluar</option>
+              </select></div>
+            <div class="col-6 col-md-2 per"><label class="form-label">Dari</label><input type="date" id="from" class="form-control"></div>
+            <div class="col-6 col-md-2 per"><label class="form-label">Sampai</label><input type="date" id="to" class="form-control"></div>
+            <div class="col-6 col-md-2"><label class="form-label">Kategori</label><select id="cat" class="form-select"></select></div>
+            <div class="col-6 col-md-2"><label class="form-label">Gudang</label><select id="wh" class="form-select"></select></div>
+            <div class="col-md-1"><button class="btn btn-pln w-100" id="btnShow" title="Tampilkan"><i class="bi bi-search"></i></button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 no-print">
+          <span id="rTitle">Laporan</span>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-success" id="btnXls"><i class="bi bi-file-earmark-excel me-1"></i>Excel</button>
+            <button class="btn btn-outline-danger" id="btnPdf"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</button>
+            <button class="btn btn-outline-secondary" id="btnPrint"><i class="bi bi-printer me-1"></i>Cetak</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="print-only mb-3">
+            <h5 class="mb-0" id="pTitle"></h5><div id="pMeta" class="text-muted"></div>
+          </div>
+          <div id="summary" class="mb-2 text-muted small"></div>
+          <div class="table-responsive"><table class="table table-hover table-sm"><thead id="thead"></thead><tbody id="rows"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+    <div class="app-footer">SIMBAR PLN &middot; Sistem Monitoring Barang</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script>
+  (async () => {
+    const user = await initPage('Laporan');
+    if (!user) return;
+
+    // Definisi kolom tiap laporan: [header, fungsi nilai (teks untuk ekspor), rata-kanan?]
+    const REPORTS = {
+      stock: { title: 'Laporan Stok Barang', period: false, cols: [
+        ['Kode', (r) => r.kode], ['Nama Barang', (r) => r.nama], ['Kategori', (r) => r.kategori], ['Gudang', (r) => r.gudang],
+        ['Stok', (r) => Number(r.stock), true], ['Satuan', (r) => r.satuan], ['Stok Min.', (r) => Number(r.stok_min), true], ['Status', (r) => r.status]] },
+      incoming: { title: 'Laporan Barang Masuk', period: true, cols: [
+        ['Tanggal', (r) => fmtDate(r.tanggal)], ['No. Dokumen', (r) => r.no_dokumen], ['Supplier', (r) => r.supplier], ['Kode', (r) => r.kode],
+        ['Nama Barang', (r) => r.nama], ['Kategori', (r) => r.kategori], ['Gudang', (r) => r.gudang], ['Jumlah', (r) => Number(r.jumlah), true], ['Satuan', (r) => r.satuan]] },
+      outgoing: { title: 'Laporan Barang Keluar', period: true, cols: [
+        ['Tanggal', (r) => fmtDate(r.tanggal)], ['No. Permintaan', (r) => r.no_permintaan], ['Tujuan', (r) => r.tujuan], ['Penerima', (r) => r.penerima],
+        ['Kode', (r) => r.kode], ['Nama Barang', (r) => r.nama], ['Gudang', (r) => r.gudang], ['Jumlah', (r) => Number(r.jumlah), true], ['Satuan', (r) => r.satuan]] },
+    };
+    let current = null; // {type, rows, meta}
+
+    const m = await loadMaster(['categories', 'warehouses']);
+    $('#cat').innerHTML = options(m.categories, '', 'Semua');
+    $('#wh').innerHTML = options(m.warehouses, '', 'Semua');
+    const d = new Date();
+    $('#from').value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    $('#to').value = today();
+
+    const selText = (sel) => sel.value ? sel.options[sel.selectedIndex].text : 'Semua';
+    const cell = (v, right, status) => {
+      if (typeof v === 'number') v = fmtNum(v);
+      return `<td class="${right ? 'text-end' : ''}">${esc(v)}</td>`;
+    };
+
+    async function show() {
+      const type = $('#type').value;
+      const R = REPORTS[type];
+      $$('.per').forEach((e) => (e.style.display = R.period ? '' : 'none'));
+      $('#thead').innerHTML = '<tr><th>#</th>' + R.cols.map((c) => `<th class="${c[2] ? 'text-end' : ''}">${c[0]}</th>`).join('') + '</tr>';
+      $('#rows').innerHTML = loadingRow(R.cols.length + 1);
+      try {
+        const res = await withLoading($('#btnShow'), () => api('reports.php', { params: { type, from: R.period ? $('#from').value : '', to: R.period ? $('#to').value : '', category_id: $('#cat').value, warehouse_id: $('#wh').value } }));
+        const meta = [
+          R.period ? `Periode: ${fmtDate($('#from').value)} s/d ${fmtDate($('#to').value)}` : `Per tanggal: ${fmtDate(today())}`,
+          `Kategori: ${selText($('#cat'))}`, `Gudang: ${selText($('#wh'))}`,
+        ].join('  |  ');
+        current = { type, rows: res.data, meta };
+        $('#rTitle').textContent = R.title;
+        $('#pTitle').textContent = R.title.toUpperCase();
+        $('#pMeta').textContent = meta + `  |  Dicetak oleh: ${user.nama}  |  ${fmtDateTime(new Date().toISOString().slice(0, 10) + ' ' + new Date().toTimeString().slice(0, 5))}`;
+        $('#rows').innerHTML = res.data.length
+          ? res.data.map((r, n) => `<tr><td>${n + 1}</td>` + R.cols.map((c) => {
+              const v = c[1](r);
+              if (c[0] === 'Status') return `<td><span class="badge badge-${v === 'Aman' ? 'aman' : v === 'Habis' ? 'habis' : 'menipis'}">${esc(v)}</span></td>`;
+              return cell(v, c[2]);
+            }).join('') + '</tr>').join('')
+          : emptyRow(R.cols.length + 1, 'Tidak ada data untuk filter ini');
+        const total = res.data.reduce((s, r) => s + Number(type === 'stock' ? r.stock : r.jumlah), 0);
+        $('#summary').textContent = `${res.data.length} baris` + (type === 'stock' ? ` · Total stok (semua satuan): ${fmtNum(total)}` : ` · Total jumlah (semua satuan): ${fmtNum(total)}`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function table() {
+      const R = REPORTS[current.type];
+      const head = ['No', ...R.cols.map((c) => c[0])];
+      const body = current.rows.map((r, n) => [n + 1, ...R.cols.map((c) => c[1](r))]);
+      return { R, head, body };
+    }
+    const need = () => { if (!current) { toast('Tampilkan laporan terlebih dahulu.', 'error'); return false; } return true; };
+
+    $('#btnXls').addEventListener('click', () => {
+      if (!need()) return;
+      const { R, head, body } = table();
+      const ws = XLSX.utils.aoa_to_sheet([[R.title], [current.meta], [], head, ...body]);
+      ws['!cols'] = head.map((h) => ({ wch: Math.max(10, String(h).length + 4) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Laporan');
+      XLSX.writeFile(wb, `${current.type}-${today()}.xlsx`);
+    });
+
+    $('#btnPdf').addEventListener('click', () => {
+      if (!need()) return;
+      const { R, head, body } = table();
+      const doc = new jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      doc.setFontSize(14); doc.text(R.title.toUpperCase(), 14, 14);
+      doc.setFontSize(9); doc.text(current.meta, 14, 20);
+      doc.text(`Dicetak oleh: ${user.nama} - ${fmtDate(today())}`, 14, 25);
+      doc.autoTable({
+        head: [head], body: body.map((r) => r.map((v) => (typeof v === 'number' ? fmtNum(v) : v))),
+        startY: 29, styles: { fontSize: 8 }, headStyles: { fillColor: [27, 117, 188] },
+        columnStyles: Object.fromEntries(R.cols.map((c, i) => [i + 1, c[2] ? { halign: 'right' } : {}])),
+      });
+      doc.save(`${current.type}-${today()}.pdf`);
+    });
+
+    $('#btnPrint').addEventListener('click', () => { if (need()) window.print(); });
+    $('#btnShow').addEventListener('click', show);
+    $('#type').addEventListener('change', show);
+    show();
+  })();
+  </script>
+</body>
+</html>
